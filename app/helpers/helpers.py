@@ -1,6 +1,7 @@
 import polars as pl
 from app.db import SessionLocal
 
+
 def criar_df(model) -> pl.DataFrame:
     db = SessionLocal()
 

@@ -3,6 +3,7 @@ from helpers.helpers import criar_df, search_db
 from models.titulo_bancario import TituloBancario
 from models.municipio import Municipio
 from models.codigo_tributacao import CodigoTributacao
+from models.cosif_conta import CosifConta
 import re
 import polars as pl
 from polars import Series
@@ -22,6 +23,7 @@ class Validador:
         self.modulo: Optional[int] = None
         self.blocos_registros: Optional[dict[str, pl.DataFrame]] = None
         self.erros: Optional[List[str]] = []
+        self.contas_cosif: Optional[pl.DataFrame] = None
 
     def validar(self) -> None:
         if self.arquivo_vazio():
@@ -40,6 +42,9 @@ class Validador:
             self.verificar_versao_desif('3.1')  # ED043 (0000)
             self.verificar_registro0000_duplicado()  # ED037 (0000)
         self.verifica_registros_informados_incorretamente()  # EI030 (0100 0200 0300)
+        self.verificar_contas_mistas_repetidas(self.blocos_registros['0100'])
+        self.verificar_conta_cosif_e_superior_em_contas_mistas(self.blocos_registros['0100'])
+        self.verificar_contas_de_receitas()
         self.verificar_campos()  # ED006(0000), EG008(Todos), EG007(0000, 0410) EG009(0000), ED015(0000), EG046 (Todos)
 
     def definir_registros(self):
@@ -209,14 +214,6 @@ class Validador:
 
     def verificar_campos_reg0100(self, linha, linha_anterior, linha_seguinte, info_campo, nome_campo, valor,
                                  numero_linha) -> None:
-        if nome_campo == "conta":
-            des_mista = linha.get_column('des_mista')[0]
-            itens = self.blocos_registros['0100'].filter(
-                (pl.col('conta') == valor) & (pl.col('des_mista') == des_mista))
-            if itens.height > 1:
-                for i in range(0, itens.height):
-                    self.gerar_mensagem_erro('EI001', {'Linha': numero_linha, 'Campo': nome_campo})
-
         if nome_campo == 'des_mista':
             if int(valor) >= 2:
                 des_anterior = linha_anterior.get_column('des_mista')[0]
@@ -227,9 +224,32 @@ class Validador:
                 des_seguinte = linha_seguinte.get_column('des_mista')[0]
                 if des_seguinte is not None:
                     self.verificacao_dinamica(int(des_seguinte), nome_campo, numero_linha, lambda v: v == 2, 'EG031')
+        if nome_campo == 'desc_conta':
+            if valor is None:
+                conta = linha.get_column('conta')[0]
+                pattern = r'(\d{1})(\d{1})(\d{1})(\d{2})(\d{2})(\d+)'
+                resultado = re.search(pattern, conta)
+                if resultado.group(5) != '00':
+                    self.erros.append(self.gerar_mensagem_erro('EI004', {
+                        'Linha': numero_linha,
+                        'Campo': nome_campo
+                    }))
+                elif resultado.group(4) != '00':
+                    self.erros.append(self.gerar_mensagem_erro('EI004', {
+                        'Linha': numero_linha,
+                        'Campo': nome_campo
+                    }))
         if nome_campo == 'conta_cosif':
             self.verificacao_dinamica(valor, nome_campo, numero_linha, lambda v: v[0] in ['7', '8'],
                                       'EG037')
+            result = self.pegar_contas_cosif().filter(pl.col('conta') == valor)
+            # self.verificacao_dinamica(result.height, nome_campo, numero_linha, lambda v: v > 0, 'EG036')
+            pattern = r'(\d{1})(\d{1})(\d{1})(\d{2})(\d{2})(\d+)'
+            resultado = re.search(pattern, valor)
+            if resultado.group(4) == '00':
+                cosif_repetidas = self.blocos_registros['0100'].filter(pl.col('conta_cosif') == valor)
+                self.verificacao_dinamica(cosif_repetidas.height, nome_campo, numero_linha, lambda v: v == 1,
+                                          'EG043')
         if nome_campo == 'conta_supe':
             valor_conta = linha.get_column('conta_cosif')[0]
             self.verificacao_dinamica(valor, nome_campo, numero_linha, lambda v: v != valor_conta, 'EG034')
@@ -241,13 +261,20 @@ class Validador:
                                           'EG042')
             else:
                 itens = self.blocos_registros['0100'].filter(pl.col('conta') == valor)
-                for i in range(0, len(itens)):
-                    _linha = itens[i].row(0)[0]
-                    self.verificacao_dinamica(numero_linha, nome_campo, numero_linha, lambda v: v > _linha, 'EG049')
+                if itens.height > 1:
+                    for i in range(0, len(itens)):
+                        _linha = itens[i].row(0)[0]
+                        self.verificacao_dinamica(numero_linha, nome_campo, numero_linha, lambda v: v > _linha, 'EG049')
+                # self.verificacao_dinamica(itens.height, nome_campo, numero_linha, lambda v: v > 0, 'EG033')
         if nome_campo == 'cod_trib_des_if':
             if valor is not None:
                 result = search_db(CodigoTributacao, 'codigo', valor)
                 self.verificacao_dinamica(result, nome_campo, numero_linha, lambda v: v, 'EG011')
+                conta = linha.get_column('conta')[0]
+                desdobro = linha.get_column('des_mista')[0]
+                contas_filhas = self.blocos_registros['0100'].filter(pl.col('conta_supe') == conta)
+                if contas_filhas.height > 0 or desdobro == '00':
+                    self.erros.append(self.gerar_mensagem_erro('EI010', {'Linha': numero_linha, 'Campo': nome_campo}))
 
     def verifica_registros_informados_incorretamente(self) -> None:
         if self.modulo == '3':
@@ -374,6 +401,45 @@ class Validador:
             return self.df.get_column(column_name).to_list()
         return False
 
+    def verificar_contas_mistas_repetidas(self, df: pl.DataFrame):
+        df_duplicados = df.groupby("conta", "des_mista").agg(pl.count("conta").alias("contagem"))
+        df_duplicados = df_duplicados.filter(pl.col("contagem") > 1)
+        df_linhas_repetidas = df.join(df_duplicados, on="conta", how="inner")
+        if df_linhas_repetidas.height > 1:
+            for i in range(0, df_linhas_repetidas.height):
+                pass
+                # self.erros.append(
+                # self.gerar_mensagem_erro('EI001', {'Linha': df_linhas_repetidas.row(i)[0], 'Campo': 'Conta'}))
+
+    def verificar_conta_cosif_e_superior_em_contas_mistas(self, df: pl.DataFrame):
+        df_duplicados = df.groupby("conta").agg(pl.count("conta").alias("contagem"))
+        df_duplicados = df_duplicados.filter(pl.col("contagem") > 1)
+        df_linhas_repetidas = df.join(df_duplicados, on="conta", how="inner")
+        for i in range(0, df_duplicados.height):
+            linhas = df_linhas_repetidas.filter(pl.col("conta") == df_duplicados.row(i)[0])
+            conta_mista = linhas.filter(pl.col("des_mista") == '00')
+            if conta_mista.height > 0:
+                conta_cosif = conta_mista.row(0)[7]
+                conta_superior = conta_mista.row(0)[6]
+                for j in range(0, linhas.height):
+                    self.verificacao_dinamica(linhas.row(j)[7], "conta_cosif",
+                                              linhas.row(j)[0], lambda v: v == conta_cosif, 'EG044')
+                    self.verificacao_dinamica(linhas.row(j)[6], "conta_superior",
+                                              linhas.row(j)[0], lambda v: v == conta_superior, 'EG050')
+            else:
+                self.erros.append(
+                    self.gerar_mensagem_erro('EG032', {'Linha': linhas.row(0)[0], 'Campo': 'des_mista'}))
+
+    def verificar_contas_de_receitas(self):
+        contas = self.blocos_registros['0100'].filter(pl.col('conta_cosif').str.starts_with('7'))
+        if contas.height == 0:
+            self.erros.append(self.gerar_mensagem_erro('EI023', {'Linha': '1', 'Modulo': self.modulo}))
+
+    def pegar_contas_cosif(self):
+        if self.contas_cosif is None:
+            self.contas_cosif = criar_df(CosifConta)
+        return self.contas_cosif
+
     @staticmethod
     def gerar_mensagem_erro(cod: str, fields=None) -> str:
         error_message = {
@@ -451,7 +517,25 @@ class Validador:
             "EG030": "Foi informado desdobramento sem observar a sequência numérica. O desdobramento informado nesta "
                      "linha é maior ou igual a ‘02’, porém não existe a numeração imediatamente anterior.",
             "EG031": "Foi informado apenas o desdobramento de conta mista ‘01’, sem informar outro desdobramento.",
-            "EG049": "Conta superior (campo 7 deste registro) aparece como conta de nível hierárquico inferior"
+            "EG049": "Conta superior (campo 7 deste registro) aparece como conta de nível hierárquico inferior",
+            "EG033": "Conta aparece como superior e não foi definida no Plano de Contas ou no Balancete Analítico "
+                     "para a dependência no mês.",
+            "EG036": "Conta COSIF inexistente na Tabela do COSIF.",
+            "EG044": "A conta COSIF informada na conta desdobrada é diferente da conta COSIF informada na conta "
+                     "mista. Se foi informado desdobramento de conta mista, tanto as contas desdobradas (filhas) "
+                     "quanto a conta mista (mãe) devem ter o mesmo COSIF analítico.",
+            "EG050": "A conta superior informada na conta desdobrada é diferente da conta superior informada na conta "
+                     "mista. Se foi informado desdobramento de conta mista, tanto as contas desdobradas (filhas) "
+                     "quanto a conta mista (mãe) devem referenciar a mesma conta superior.",
+            "EI023": "Não existem contas de receitas no Plano Geral de Contas Comentado - PGCC (R0100) do módulo "
+                     "Informações Comuns aos Municípios.",
+            "EI004": "Descrição da conta não foi informada. É obrigatório quando a conta for mais analítica, "
+                     "bem como para os desdobramentos de conta mista.",
+            "EI010": "Subtítulo é conta superior ou conta mista e possui código de tributação DES-IF. Somente as "
+                     "contas mais analíticas podem possuir código de tributação.",
+            "EG043": "Código COSIF em duplicidade. Uma conta COSIF de nível não analítico só pode corresponder a uma "
+                     "única conta do PGCC ou Balancete Analítico.",
+            "EG032": "Foi informado desdobramento de conta mista, porém não foi informada a conta mista (‘00’)."
         }
         message = error_message.get(cod, "Código de erro desconhecido.")
 
