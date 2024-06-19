@@ -10,7 +10,7 @@ from polars import Series
 from typing import List, Optional
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-
+from helpers.esquemas_e_leiautes import esquemas, leiautes
 
 class Validador:
 
@@ -214,7 +214,28 @@ class Validador:
 
     def verificar_campos_reg0100(self, linha, linha_anterior, linha_seguinte, info_campo, nome_campo, valor,
                                  numero_linha) -> None:
+        if nome_campo == 'conta':
+            if valor is not None:
+                if valor[5:7] == '00':
+                    contas_inferiores = self.blocos_registros['0100'].filter(pl.col('conta_supe') == valor)
+                    self.verificacao_dinamica(contas_inferiores.height, nome_campo, numero_linha, lambda v: v > 0,
+                                              'EI028')
         if nome_campo == 'des_mista':
+            if valor != "00":
+                conta = linha.get_column('conta')[0]
+                if conta[5:7] != '00':
+                    linhas = self.blocos_registros['0100'].filter(
+                        (pl.col('conta').str.starts_with(conta[:-1])) & (pl.col('conta') != conta))
+                    if linhas.height > 0:
+                        self.erros.append(self.gerar_mensagem_erro('EG051', {
+                            'Linha': numero_linha,
+                            'Campo': nome_campo
+                        }))
+                else:
+                    self.erros.append(self.gerar_mensagem_erro('EG051', {
+                        'Linha': numero_linha,
+                        'Campo': nome_campo
+                    }))
             if int(valor) >= 2:
                 des_anterior = linha_anterior.get_column('des_mista')[0]
                 if des_anterior is not None:
@@ -240,6 +261,13 @@ class Validador:
                         'Campo': nome_campo
                     }))
         if nome_campo == 'conta_cosif':
+            conta_superior = linha.get_column('conta_supe')[0]
+            if conta_superior is not None:
+                linha_conta_superior = self.blocos_registros['0100'].filter(pl.col('conta') == conta_superior)
+                if linha_conta_superior.height > 0:
+                    conta_cosif_superior = linha_conta_superior.get_column('conta_cosif')[0]
+                    self.verificacao_dinamica(conta_cosif_superior, nome_campo, numero_linha,
+                                              lambda v: v == self.identificar_conta_superior(valor), 'EG039')
             self.verificacao_dinamica(valor, nome_campo, numero_linha, lambda v: v[0] in ['7', '8'],
                                       'EG037')
             result = self.pegar_contas_cosif().filter(pl.col('conta') == valor)
@@ -251,7 +279,7 @@ class Validador:
                 self.verificacao_dinamica(cosif_repetidas.height, nome_campo, numero_linha, lambda v: v == 1,
                                           'EG043')
         if nome_campo == 'conta_supe':
-            valor_conta = linha.get_column('conta_cosif')[0]
+            valor_conta = linha.get_column('conta')[0]
             self.verificacao_dinamica(valor, nome_campo, numero_linha, lambda v: v != valor_conta, 'EG034')
             if valor is None:
                 grupo = linha.get_column('conta_cosif')[0][0]
@@ -535,7 +563,12 @@ class Validador:
                      "contas mais analíticas podem possuir código de tributação.",
             "EG043": "Código COSIF em duplicidade. Uma conta COSIF de nível não analítico só pode corresponder a uma "
                      "única conta do PGCC ou Balancete Analítico.",
-            "EG032": "Foi informado desdobramento de conta mista, porém não foi informada a conta mista (‘00’)."
+            "EG032": "Foi informado desdobramento de conta mista, porém não foi informada a conta mista (‘00’).",
+            "EG039": "A conta COSIF informada não é o desdobramento do COSIF informado para a conta superior a esta. "
+                     "A estrutura hierárquica das contas internas deve corresponder à estrutura hierárquica do COSIF.",
+            "EG051": "Foi informado desdobramento de conta mista em uma conta que não é o subtítulo mais analítico no "
+                     "plano de contas ou no balancete analítico do mês.",
+            "EI028": "Conta do PGCC, sem conta inferior, aponta para conta no COSIF que é conta superior."
         }
         message = error_message.get(cod, "Código de erro desconhecido.")
 
@@ -582,3 +615,332 @@ class Validador:
         except ValueError as e:
             print(f"Erro ao converter a data: {e}")
             return None
+
+    @staticmethod
+    def identificar_conta_superior(conta):
+        pattern = r'(\d{1})(\d{1})(\d{1})(\d{2})(\d{2})(\d+)'
+        resultado = re.search(pattern, conta)
+        conta_superior = f"{resultado.group(1)}{resultado.group(2)}{resultado.group(3)}"
+        if resultado.group(5) != '00':
+            conta_superior = f"{conta_superior}{resultado.group(4)}00"
+        elif resultado.group(4) != '00':
+            conta_superior = f"{conta_superior}0000"
+
+        dv = Validador.gerar_digito_verificador(conta_superior)
+        return f"{conta_superior}{dv}"
+
+    @staticmethod
+    def gerar_digito_verificador(codigo):
+        # Fatores de multiplicação
+        fatores = [3, 7, 1, 3, 7, 1, 3, 7, 1]
+
+        # Reverter o código para multiplicação da direita para esquerda
+        codigo_revertido = codigo[::-1]
+
+        # Inicializar soma
+        soma = 0
+
+        # Multiplicar cada dígito do código pelos fatores correspondentes
+        for i in range(len(codigo_revertido)):
+            digito = int(codigo_revertido[i])
+            fator = fatores[i]
+            soma += digito * fator
+
+        # Obter o resto da divisão da soma por 10
+        resto = soma % 10
+
+        # Subtrair o resto de 10
+        digito_verificador = 10 - resto
+
+        # Caso o resto seja zero, o dígito verificador também é zero
+        if resto == 0:
+            digito_verificador = 0
+
+        return digito_verificador
+
+
+class IdentificacaoDeclaracao:
+    def __init__(self, reg0000: pl.DataFrame, modulo):
+        self.reg0000: pl.DataFrame = reg0000
+        self.modulo = str(modulo)
+        self.errors = []
+
+    def validar(self):
+        self.ed003()
+        self.ed004_ed005_ed023_ed052_ed054_eg007()
+        self.ed006()
+        self.ed012_ed031()
+        self.ed013_ed048_ed051_ed021()
+        self.ed015()
+        self.ed024_ed026()
+        self.ed037()
+        self.ed043()
+        self.ed044_ed045_ed049()
+        self.eg001()
+        self.loop_campos()
+        return self.errors
+
+    def ed003(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('tipo_inti')[0]
+        if valor is not None:
+            result = search_db(TituloBancario, 'codigo', valor.upper())
+            if result is not None:
+                return
+        self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED003'})
+
+    def ed004_ed005_ed023_ed052_ed054_eg007(self) -> None:
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('ano_mes_fim_cmpe')[0]
+        valor_ano_mes_inic_cmpe = self.reg0000.get_column('ano_mes_inic_cmpe')[0]
+        if valor is not None:
+            if ValidacaoDesif.validar_data(valor_ano_mes_inic_cmpe) is False:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'EG007'})
+                return
+            if ValidacaoDesif.validar_data(valor) is False:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'EG007'})
+                return
+            data_limite = ValidacaoDesif.criar_data((datetime.now() - relativedelta(years=10)).strftime("%Y%m")).date()
+            data_atual = ValidacaoDesif.criar_data((datetime.now()).strftime("%Y%m")).date()
+            data_fim_competencia = ValidacaoDesif.criar_data(valor).date()
+            data_inicio_competencia = ValidacaoDesif.criar_data(valor_ano_mes_inic_cmpe).date()
+            if data_fim_competencia < data_limite:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED004'})
+            if data_inicio_competencia >= data_atual:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED005'})
+            if self.modulo == '2' and data_fim_competencia != data_inicio_competencia:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED023'})
+            if data_fim_competencia < data_inicio_competencia:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED054'})
+            if self.modulo in ['3', '4'] and data_inicio_competencia.year != data_fim_competencia.year:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED052'})
+
+    def ed006(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('tipo_decl')[0]
+        if valor not in ['1', '2']:
+            self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED006'})
+
+    def ed012_ed031(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('tipo_decl')[0]
+        if str(self.modulo) == '2':
+            if valor is None:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED012'})
+            if valor not in ['1', '2', '3', '4']:
+                self.errors.append({"linha": linha, "Reg": '0000', "Erro": 'ED031'})
+
+    def ed013_ed048_ed051_ed021(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('cnpj_resp_rclh')[0]
+        valor_tipo_cnso = self.reg0000.get_column('tipo_cnso')[0]
+        if valor_tipo_cnso in ['1', '2'] and valor is None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED013'})
+        elif valor_tipo_cnso in ['3', '4'] and valor is not None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED051'})
+        if self.modulo != '2' and valor is not None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED048'})
+        elif self.modulo != '2' and valor_tipo_cnso is not None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED021'})
+        elif self.modulo == '2' and valor is None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED048'})
+
+    def ed015(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        if self.modulo not in ['1', '2', '3', '4']:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED015'})
+
+    def ed024_ed026(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('prtc_decl_ante')[0]
+        if self.modulo == '2' and valor is None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED024'})
+        elif self.modulo == '2' and valor is not None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED026'})
+
+    def ed037(self) -> None:
+        if self.reg0000.height > 1:
+            for i in range(0, self.reg0000.height):
+                linha = self.reg0000.get_column('num_linha')[i]
+                self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED037'})
+
+    def ed043(self) -> None:
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('idn_versao')[0]
+        if valor is None or valor != '3.1':
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED043'})
+
+    def ed044_ed045_ed049(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('tipo_arred')[0]
+        if self.modulo == '2' and valor is None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED044'})
+        elif self.modulo == '2' and valor not in ['1', '2']:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED045'})
+        elif self.modulo != '2' and valor is not None:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'ED049'})
+
+    def eg001(self):
+        linha = self.reg0000.get_column('num_linha')[0]
+        valor = self.reg0000.get_column('cod_munc')[0]
+        resultado = ValidacaoDesif.eg001(valor)
+        if not resultado:
+            self.errors.append({"Linha": linha, "Reg": '0000', "Erro": 'EG001'})
+
+    def loop_campos(self):
+        for i in range(0, len(self.reg0000)):
+            linha = self.reg0000[i]
+            numero_linha = linha.get_column('num_linha')[0]
+            nome_colunas = linha.columns
+            info_campos = leiautes['0000']
+            for campo in nome_colunas:
+                info_campo = info_campos.get(campo)
+                valor = linha.get_column(campo)[0]
+                if info_campo.get('type') == 'number' and valor is not None and not ValidacaoDesif.validar_numerico(valor):
+                    self.errors.append({"Linha": numero_linha, "Reg": '0000', "Erro": 'EG008'})
+                if not ValidacaoDesif.verificar_tamanho_campos(valor, info_campo):
+                    self.errors.append({"Linha": numero_linha, "Reg": '0000', "Erro": 'EG009', "campo": campo})
+                if info_campo.get('required') and valor is None:
+                    self.errors.append({"Linha": numero_linha, "Reg": '0000', "Erro": 'EG046'})
+
+
+class ValidacaoDesif:
+    leiautes = None
+    def __init__(self, caminho_arquivo: str, esquemas, leiautes):
+        self.caminho_arquivo: str = caminho_arquivo
+        self.esquemas = esquemas
+        self.leiautes = leiautes
+        self.df: Optional[pl.DataFrame] = None
+        self.lista_registros = None
+        self.modulo: Optional[int] = None
+        self.blocos_registros: Optional[dict[str, pl.DataFrame]] = None
+        self.erros = []
+        self.contas_cosif: Optional[pl.DataFrame] = None
+
+    def validar(self) -> None:
+        if self.eg018():
+            self.erros.append({"error": "EG018"})
+            return
+        if not self.eg019():
+            return
+        self.modulo = self.df.row(0)[8]
+        self.lista_registros = self.definir_registros()
+        self.quebrar_dataframe_em_registros()
+        self.eg003_eg013()
+        if self.ed035():
+            ident_declaracao = IdentificacaoDeclaracao(self.blocos_registros['0000'], self.modulo)
+            erros = ident_declaracao.validar()
+            self.erros.extend(erros)
+
+
+    def eg018(self) -> bool:
+        return os.path.getsize(self.caminho_arquivo) == 0
+
+    def eg019(self) -> bool:
+        try:
+            self.df = pl.scan_csv(self.caminho_arquivo, separator='|', encoding='utf8', has_header=False,
+                                  schema_overrides=self.esquemas['padrao'], truncate_ragged_lines=True).collect()
+            return True
+        except UnicodeDecodeError:
+            self.erros.append({"error": "EG019"})
+        except Exception as e:
+            self.erros.append("ERROR: Erro ao ler o arquivo: " + str(e))
+        return False
+
+    def definir_registros(self):
+        if self.modulo == '3':
+            data = {}
+            for i in ['0000', '0100']:
+                data[i] = {
+                    "esquema": self.esquemas[i],
+                    "colunas": len(self.esquemas[i].keys())
+                }
+            return data
+
+    def quebrar_dataframe_em_registros(self) -> None:
+        blocks = {}
+        if not self.lista_registros:
+            return
+        for registro in self.lista_registros.keys():
+            if registro:
+                block = self.df.filter(pl.col('column_2') == registro)
+                if block.height > 0:
+                    blocks[registro] = self.criar_dataframe(block, self.lista_registros[registro]['esquema'])
+
+        self.blocos_registros = blocks
+
+    def ed035(self) -> bool:
+        reg = self.df.get_column('column_2')[0]
+        if reg != '0000':
+            self.erros.append({"Erro": 'ED035'})
+            return False
+        return True
+
+    def eg003_eg013(self) -> None:
+        linhas = self.df.get_column('column_1')
+
+        for i in range(0, len(linhas)):
+            if linhas[i] is None:
+                self.erros.append({"Linha": i + 1, "Erro": 'EG013'})
+            if linhas[i] != str(i + 1):
+                self.erros.append({"Linha": i + 1, "Erro": 'EG003'})
+
+    @staticmethod
+    def criar_dataframe(data: pl.DataFrame, esquema) -> pl.DataFrame:
+        columns = list(esquema.keys())
+        new_df = pl.DataFrame({
+            columns[i]: data[f'column_{i + 1}'].cast(esquema[columns[i]])
+            for i in range(len(columns))
+        }, strict=False)
+        return new_df
+
+    @staticmethod
+    def criar_data(data_str: str):
+        try:
+            if len(data_str) == 6:
+                # Formato aaaamm
+                data = datetime.strptime(data_str, "%Y%m")
+            elif len(data_str) == 8:
+                # Formato aaaammdd
+                data = datetime.strptime(data_str, "%Y%m%d")
+            else:
+                raise ValueError("Formato de data inválido. Use aaaamm ou aaaammdd.")
+            return data
+        except ValueError as e:
+            print(f"Erro ao converter a data: {e}")
+            return None
+
+    @staticmethod
+    def eg001(valor: str):
+        result = search_db(Municipio, 'cod_ibge', valor)
+        if result:
+            return True
+        return False
+
+    @staticmethod
+    def validar_data(valor) -> bool:
+        regex = r'^\d{4}(0[1-9]|1[0-2])$'
+        return bool(re.match(regex, valor))
+
+    @staticmethod
+    def validar_numerico(s: str) -> bool:
+        # Expressão regular para validar números inteiros ou decimais com vírgula
+        regex = r'^-?\d+(,\d+)?$'
+        return bool(re.match(regex, s))
+
+    @staticmethod
+    def verificar_tamanho_campos(valor, info_campo) -> bool:
+        if valor is None:
+            if info_campo.get('required'):
+                return False
+            return True
+        tamanho = info_campo.get('length')
+        tamanho_exato = info_campo.get('exact_length')
+        length = len(str(valor))
+        if tamanho_exato:
+            if length != tamanho:
+                return False
+        else:
+            if length > tamanho:
+                return False
+        return True
