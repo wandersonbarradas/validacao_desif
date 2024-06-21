@@ -36,7 +36,7 @@ esquema_0000 = {
 }
 esquema_0100 = {
 
-    'num_linha': Int64,
+    'num_linha': Utf8,
     'reg': Utf8,
     'conta': Utf8,
     'des_mista': Utf8,
