@@ -1,8 +1,8 @@
 import time
-from validator import ValidacaoDesif
+from app.classes.validador_desif import ValidacaoDesif
 from helpers.esquemas_e_leiautes import esquemas, leiautes
 
-caminho = "C:/Users/wande/Downloads/pgcc_sa.txt"
+caminho = "C:/Users/DEV LENOVO/Downloads/pgcc.txt.p7s"
 inicio = time.time()
 validation = ValidacaoDesif(caminho, esquemas, leiautes)
 validation.validar()
