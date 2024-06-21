@@ -1,7 +1,6 @@
 import polars as pl
 from datetime import datetime
 from ..helpers.helpers import search_db
-from ..helpers.esquemas_e_leiautes import leiautes
 from ..models.titulo_bancario import TituloBancario
 from dateutil.relativedelta import relativedelta
 
@@ -121,7 +120,7 @@ class IdentificacaoDeclaracao:
         linha = self.reg0000[0]
         numero_linha = linha.get_column('num_linha')[0]
         nome_colunas = linha.columns
-        info_campos = leiautes['0000']
+        info_campos = self.validacao_desif.leiautes['0000']
         for nome_campo in nome_colunas:
             info_campo = info_campos.get(nome_campo)
             valor = linha.get_column(nome_campo)[0]

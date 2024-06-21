@@ -1,5 +1,4 @@
 import polars as pl
-from ..helpers.esquemas_e_leiautes import leiautes
 import re
 
 
@@ -22,7 +21,7 @@ class PlanoGeralContasComentado:
             linha = self.reg0100[i]
             numero_linha = linha.get_column('num_linha')[0]
             nome_colunas = linha.columns
-            info_campos = leiautes['0100']
+            info_campos = self.validacao_desif.leiautes['0100']
             for nome_campo in nome_colunas:
                 info_campo = info_campos.get(nome_campo)
                 valor = linha.get_column(nome_campo)[0]
