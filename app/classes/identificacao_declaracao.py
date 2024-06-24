@@ -1,7 +1,7 @@
 import polars as pl
 from datetime import datetime
-from ..helpers.helpers import search_db
-from ..models.titulo_bancario import TituloBancario
+from app.helpers.helpers import search_db
+from app.models.titulo_bancario import TituloBancario
 from dateutil.relativedelta import relativedelta
 
 

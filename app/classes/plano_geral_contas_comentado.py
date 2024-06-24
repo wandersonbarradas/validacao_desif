@@ -89,12 +89,13 @@ class PlanoGeralContasComentado:
         if valor is not None:
             conta_cosif = linha.get_column('conta_cosif')[0]
             if conta_cosif[5:7] == '00':
-                cosifs_inferiores = self.validacao_desif.pegar_contas_cosif().filter(
-                    pl.col("conta_superior").str.replace_all('.', "", literal=True).str.replace_all('-', "",
-                                                                                                    literal=True) == conta_cosif)
                 contas_inferiores = self.reg0100.filter(pl.col('conta_supe') == valor)
-                if contas_inferiores.height == 0 and cosifs_inferiores.height > 0:
-                    self.erros.append({"linha": num_linha, "Reg": '0100', "erro": 'EI028'})
+                if contas_inferiores.height == 0:
+                    cosifs_inferiores = self.validacao_desif.pegar_contas_cosif().filter(
+                        pl.col("conta_superior").str.replace_all('.', "", literal=True).str.replace_all('-', "",
+                                                                                                        literal=True) == conta_cosif)
+                    if cosifs_inferiores.height > 0:
+                        self.erros.append({"linha": num_linha, "Reg": '0100', "erro": 'EI028'})
 
     def ei004(self, valor, linha: pl.DataFrame, num_linha):
         if valor is None:

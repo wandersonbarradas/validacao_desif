@@ -1,8 +1,7 @@
-from .user import User
-from .cosif_conta import CosifConta
-from .titulo_bancario import TituloBancario
-from .municipio import Municipio
-from .codigo_tributacao import CodigoTributacao
-from .tipo_estabelecimento import TipoEstabelecimento
-
-__all__ = ["User", "CosifConta", "TituloBancario", "Municipio", "CodigoTributacao", "TipoEstabelecimento"]
+# app/models/__init__.py
+from .codigo_tributacao import *
+from .cosif_conta import *
+from .municipio import *
+from .tipo_estabelecimento import *
+from .titulo_bancario import *
+from .user import *

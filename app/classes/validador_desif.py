@@ -1,16 +1,16 @@
 import os
 import re
 import subprocess
-from ..helpers import criar_df, search_db
-from ..models.municipio import Municipio
-from ..models.codigo_tributacao import CodigoTributacao
-from ..models.cosif_conta import CosifConta
+from app.helpers.helpers import criar_df, search_db
+from app.models.municipio import Municipio
+from app.models.codigo_tributacao import CodigoTributacao
+from app.models.cosif_conta import CosifConta
 import polars as pl
 from polars import Series
 from typing import Optional
 from datetime import datetime
-from .identificacao_declaracao import IdentificacaoDeclaracao
-from .plano_geral_contas_comentado import PlanoGeralContasComentado
+from app.classes.identificacao_declaracao import IdentificacaoDeclaracao
+from app.classes.plano_geral_contas_comentado import PlanoGeralContasComentado
 from io import StringIO
 
 
