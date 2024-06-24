@@ -2,7 +2,7 @@ import subprocess
 import re
 
 # Caminho do arquivo assinado
-file_path = 'pgcc.txt.p7s'  # Substitua pelo caminho correto do arquivo
+file_path = 'app/pgcc.txt.p7s'  # Substitua pelo caminho correto do arquivo
 
 
 # Função para extrair informações do certificado usando OpenSSL
@@ -55,20 +55,21 @@ def extract_content_without_cert(file_path):
     return content
 
 
-# Extrair e imprimir as informações do certificado
-certificate_info = extract_certificate_info_openssl(file_path)
-cnpj = extract_cnpj(certificate_info)
+def run():
+    # Extrair e imprimir as informações do certificado
+    certificate_info = extract_certificate_info_openssl(file_path)
+    cnpj = extract_cnpj(certificate_info)
 
-print("Informações do Certificado:")
-print(certificate_info)
+    print("Informações do Certificado:")
+    print(certificate_info)
 
-if cnpj:
-    print(f"CNPJ: {cnpj}")
-else:
-    print("CNPJ não encontrado no certificado.")
+    if cnpj:
+        print(f"CNPJ: {cnpj}")
+    else:
+        print("CNPJ não encontrado no certificado.")
 
-# Extrair e imprimir o conteúdo sem o certificado
-content_without_cert = extract_content_without_cert(file_path)
+    # Extrair e imprimir o conteúdo sem o certificado
+    content_without_cert = extract_content_without_cert(file_path)
 
-print("Conteúdo do Arquivo (sem o certificado):")
-print(content_without_cert[:1000])  # Primeiros 1000 caracteres do conteúdo
+    print("Conteúdo do Arquivo (sem o certificado):")
+    print(content_without_cert[:1000])  # Primeiros 1000 caracteres do conteúdo

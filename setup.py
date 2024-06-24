@@ -18,4 +18,10 @@ setup(
     python_requires='>=3.12',
     author='Wanderson Barradas',
     author_email='wandersonbarrdas07@gmail.com',
+    entry_points={
+        'console_scripts': [
+            'validar = app.main:validar',
+            'teste = app.teste:run',
+        ],
+    },
 )
