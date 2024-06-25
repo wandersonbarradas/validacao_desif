@@ -58,10 +58,8 @@ class PlanoGeralContasComentado:
         if not result:
             self.erros.append({"linha": num_linha, "Reg": '0100', "erro": 'EG011'})
         conta = linha.get_column('conta')[0]
-        contas_iguais = self.reg0100.filter(pl.col('conta') == conta)
-        desdobro = linha.get_column('des_mista')[0]
-        contas_filhas = self.reg0100.filter(pl.col('conta_supe') == conta)
-        if contas_filhas.height > 0 or (contas_iguais.height > 1 and desdobro == '00'):
+        is_analitico = self.validacao_desif.verificar_subtitulo_analitico(conta, linha)
+        if not is_analitico:
             self.erros.append({"linha": num_linha, "Reg": '0100', "erro": 'EI010'})
 
     def eg030_eg031_eg051(self, valor: str, linha: pl.DataFrame, loop: int, num_linha: int | str):

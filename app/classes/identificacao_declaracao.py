@@ -19,6 +19,9 @@ class IdentificacaoDeclaracao:
         self.ed015()
         self.ed037()
         self.loop_campos()
+        if self.modulo == '3':
+            if not self.validacao_desif.verificar_registro('0200'):
+                self.erros.append({'linha': '1', 'Reg': '0000', 'erro': 'EI024'})
         return self.erros
 
     def ed003(self, valor, num_linha) -> None:
@@ -148,3 +151,4 @@ class IdentificacaoDeclaracao:
     def ed059(self, valor, num_linha):
         if valor is not None and valor != '2203305':
             self.erros.append({"Linha": num_linha, "Reg": '0000', "Erro": 'ED059'})
+

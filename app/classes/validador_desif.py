@@ -5,12 +5,16 @@ from app.helpers.helpers import criar_df, search_db
 from app.models.municipio import Municipio
 from app.models.codigo_tributacao import CodigoTributacao
 from app.models.cosif_conta import CosifConta
+from app.models.tarifa_bancaria import TarifaBancaria
+from app.models.produto_servico import ProdutoServico
 import polars as pl
 from polars import Series
 from typing import Optional
 from datetime import datetime
 from app.classes.identificacao_declaracao import IdentificacaoDeclaracao
 from app.classes.plano_geral_contas_comentado import PlanoGeralContasComentado
+from app.classes.tarifas_bancarias import TarifasBancarias
+from app.classes.identificacao_outros_produtos_servicos import IdentificacaoOutrosProdutosServicos
 from io import StringIO
 
 
@@ -28,6 +32,8 @@ class ValidacaoDesif:
         self.blocos_registros: Optional[dict[str, pl.DataFrame]] = None
         self.erros = []
         self.contas_cosif: Optional[pl.DataFrame] = None
+        self.tarifas_bancarias: Optional[pl.DataFrame] = None
+        self.outros_produtos_servicos: Optional[pl.DataFrame] = None
 
     def validar(self) -> None:
         self.extract_content_without_cert()
@@ -39,19 +45,29 @@ class ValidacaoDesif:
         self.modulo = self.df.row(0)[8]
         self.lista_registros = self.definir_registros()
         self.quebrar_dataframe_em_registros()
-        self.verifica_registros_informados_incorretamente()
         self.pegar_contas_cosif()
         self.eg003_eg013()
         self.eg012()
         self.eg014()
-        if self.ed035():
-            ident_declaracao = IdentificacaoDeclaracao(self.blocos_registros['0000'], self.modulo, self)
-            erros = ident_declaracao.validar()
-            self.erros.extend(erros)
-        if '0100' in self.lista_registros:
-            pgcc = PlanoGeralContasComentado(self.blocos_registros['0100'], self)
-            erros = pgcc.validar()
-            self.erros.extend(erros)
+        if self.modulo != '4':
+            if self.ed035():
+                ident_declaracao = IdentificacaoDeclaracao(self.blocos_registros['0000'], self.modulo, self)
+                erros = ident_declaracao.validar()
+                self.erros.extend(erros)
+        if self.modulo == '3':
+            self.ei030()
+            if '0100' in self.lista_registros:
+                pgcc = PlanoGeralContasComentado(self.blocos_registros['0100'], self)
+                erros = pgcc.validar()
+                self.erros.extend(erros)
+            if '0200' in self.lista_registros:
+                tarifas_bancarias = TarifasBancarias(self.blocos_registros['0200'], self)
+                erros = tarifas_bancarias.validar()
+                self.erros.extend(erros)
+            if '0300' in self.lista_registros:
+                pro_serv = IdentificacaoOutrosProdutosServicos(self.blocos_registros['0300'], self)
+                erros = pro_serv.validar()
+                self.erros.extend(erros)
 
     def extract_content_without_cert(self):
         # Comando OpenSSL para extrair o conteúdo do arquivo .p7s
@@ -90,11 +106,12 @@ class ValidacaoDesif:
     def definir_registros(self):
         if self.modulo == '3':
             data = {}
-            for i in ['0000', '0100']:
-                data[i] = {
-                    "esquema": self.esquemas[i],
-                    "colunas": len(self.esquemas[i].keys())
-                }
+            for i in ['0000', '0100', '0200', '0300']:
+                if self.df.filter(pl.col('column_2') == i).height > 0:
+                    data[i] = {
+                        "esquema": self.esquemas[i],
+                        "colunas": len(self.esquemas[i].keys())
+                    }
             return data
 
     def quebrar_dataframe_em_registros(self) -> None:
@@ -145,7 +162,17 @@ class ValidacaoDesif:
             self.contas_cosif = criar_df(CosifConta)
         return self.contas_cosif
 
-    def verifica_registros_informados_incorretamente(self) -> None:
+    def pegar_tarifas_bancarias(self):
+        if self.tarifas_bancarias is None:
+            self.tarifas_bancarias = criar_df(TarifaBancaria)
+        return self.tarifas_bancarias
+
+    def pegar_outros_produtos_servicos(self):
+        if self.outros_produtos_servicos is None:
+            self.outros_produtos_servicos = criar_df(ProdutoServico)
+        return self.outros_produtos_servicos
+
+    def ei030(self) -> None:
         if str(self.modulo) == '3':
             data = self.df.filter(~pl.col('column_2').is_in(self.lista_registros.keys()))
             if data.height > 0:
@@ -153,6 +180,21 @@ class ValidacaoDesif:
                     num_linha = data[i].select('column_1').row(0)[0]
                     reg = data[i].select('column_2').row(0)[0]
                     self.erros.append({"linha": num_linha, "reg": reg, "erro": 'EI030'})
+
+    def verificar_registro(self, registro: str) -> bool:
+        return registro in self.lista_registros.keys()
+
+    def verificar_subtitulo_analitico(self, conta, linha: pl.DataFrame) -> bool:
+        if '0100' in self.blocos_registros:
+            contas_iguais = self.blocos_registros['0100'].filter(pl.col('conta') == conta)
+            desdobro = linha.get_column('des_mista')[0]
+            if contas_iguais.height > 1 and desdobro == '00':
+                return False
+            else:
+                contas_filhas = self.blocos_registros['0100'].filter(pl.col('conta_supe') == conta)
+                if contas_filhas.height > 0:
+                    return False
+            return True
 
     @staticmethod
     def criar_dataframe(data: pl.DataFrame, esquema) -> pl.DataFrame:
@@ -221,7 +263,8 @@ class ValidacaoDesif:
 
     @staticmethod
     def validar_data(valor) -> bool:
-        regex = r'^\d{4}(0[1-9]|1[0-2])$'
+        # Regex para validar datas em formato aaaamm ou aaaammdd
+        regex = r'^\d{4}(0[1-9]|1[0-2])([0-2][0-9]|3[0-1])?$'
         return bool(re.match(regex, valor))
 
     @staticmethod
@@ -233,19 +276,32 @@ class ValidacaoDesif:
     @staticmethod
     def validar_tamanho(valor, info_campo) -> bool:
         if valor is None:
-            if info_campo.get('required'):
-                return False
-            return True
-        tamanho = info_campo.get('length')
-        tamanho_exato = info_campo.get('exact_length')
-        length = len(str(valor))
-        if tamanho_exato:
-            if length != tamanho:
-                return False
+            return not info_campo.get('required', True)
+
+        tamanho_info = info_campo.get('length', '')
+        is_tamanho_exato = info_campo.get('exact_length', False)
+        valor_str = str(valor)
+
+        if ',' in tamanho_info:
+            max_length, decimal_places = map(int, tamanho_info.split(','))
+            if ',' in valor_str:
+                inteiro, decimal = valor_str.split(',')
+                total_length = len(inteiro) + len(decimal)
+            else:
+                return False  # Número deveria ter uma vírgula e não tem
+
+            if is_tamanho_exato:
+                return total_length == max_length and len(decimal) == decimal_places
+            else:
+                return len(inteiro) <= max_length - decimal_places and len(decimal) <= decimal_places
         else:
-            if length > tamanho:
-                return False
-        return True
+            max_length = int(tamanho_info)
+            total_length = len(valor_str)
+
+            if is_tamanho_exato:
+                return total_length == max_length
+            else:
+                return total_length <= max_length
 
     @staticmethod
     def nao_numerico_ou_vazio(s: pl.Series) -> Series:
@@ -375,5 +431,6 @@ class ValidacaoDesif:
         return digito_verificador
 
     @staticmethod
-    def remover_pontuacao(s: pl.Series) -> Series:
-        return s.str.replace_all(".", "", literal=True).str.replace_all("-", "", literal=True)
+    def is_negativo(valor):
+        return float(str(valor).replace(',', '.')) < 0
+
