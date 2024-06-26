@@ -42,7 +42,8 @@ class IdentificacaoDeclaracao:
             if self.validacao_desif.validar_data(valor) is False:
                 self.erros.append({"linha": linha, "Reg": '0000', "erro": 'EG007'})
                 return
-            data_limite = self.validacao_desif.criar_data((datetime.now() - relativedelta(years=10)).strftime("%Y%m")).date()
+            data_limite = self.validacao_desif.criar_data(
+                (datetime.now() - relativedelta(years=10)).strftime("%Y%m")).date()
             data_atual = self.validacao_desif.criar_data((datetime.now()).strftime("%Y%m")).date()
             data_fim_competencia = self.validacao_desif.criar_data(valor).date()
             data_inicio_competencia = self.validacao_desif.criar_data(valor_ano_mes_inic_cmpe).date()
@@ -134,11 +135,17 @@ class IdentificacaoDeclaracao:
                 self.erros.append({"linha": numero_linha, "Reg": '0000', "erro": 'EG009'})
             if info_campo.get('required') and valor is None:
                 self.erros.append({"linha": numero_linha, "Reg": '0000', "erro": 'EG046'})
+
+            if nome_campo == 'cnpj':
+                self.ed058(valor)
             if nome_campo == 'cod_munc':
                 self.eg001(valor, numero_linha)
                 self.ed059(valor, numero_linha)  # TODO: Puxar tabela de configurações
             if nome_campo == 'tipo_inti':
                 self.ed003(valor, numero_linha)
+            if nome_campo == 'ano_mes_fim_cmpe':
+                if self.modulo == '3':
+                    self.ed081(valor, linha)
             if nome_campo == 'tipo_decl':
                 self.ed006(valor, numero_linha)
             if nome_campo == 'prtc_decl_ante':
@@ -151,4 +158,21 @@ class IdentificacaoDeclaracao:
     def ed059(self, valor, num_linha):
         if valor is not None and valor != '2203305':
             self.erros.append({"Linha": num_linha, "Reg": '0000', "Erro": 'ED059'})
+
+    def ed058(self, valor):
+        cnpj: str = self.validacao_desif.extrair_cnpj()
+        if cnpj is not None:
+            if cnpj.startswith(valor):
+                return
+        self.erros.append({"Linha": '1', "Reg": '0000', "Erro": 'ED058'})
+
+    def ed081(self, valor, linha: pl.DataFrame):
+        ano_mes_inic_cmpe = linha.get_column('ano_mes_inic_cmpe')[0]
+        if self.validacao_desif.validar_data(valor) and self.validacao_desif.validar_data(ano_mes_inic_cmpe):
+            data_inicio = self.validacao_desif.criar_data(ano_mes_inic_cmpe)
+            data_fim = self.validacao_desif.criar_data(valor)
+            semestre1 = (data_inicio.month - 1) // 6 + 1
+            semestre2 = (data_fim.month - 1) // 6 + 1
+            if semestre1 != semestre2:
+                self.erros.append({"Linha": '1', "Reg": '0000', "Erro": 'ED081'})
 
