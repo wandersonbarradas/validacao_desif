@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import time
 from app.helpers.helpers import criar_df, search_db
 from app.models.municipio import Municipio
 from app.models.codigo_tributacao import CodigoTributacao
@@ -23,7 +24,7 @@ class ValidacaoDesif:
     def __init__(self, caminho_arquivo: str, esquemas, leiautes):
         self.caminho_arquivo: str = caminho_arquivo
         self.arquivo = None
-        self.conteudo = ""
+        self.conteudo: str = ""
         self.esquemas = esquemas
         self.leiautes = leiautes
         self.df: Optional[pl.DataFrame] = None
@@ -34,9 +35,10 @@ class ValidacaoDesif:
         self.contas_cosif: Optional[pl.DataFrame] = None
         self.tarifas_bancarias: Optional[pl.DataFrame] = None
         self.outros_produtos_servicos: Optional[pl.DataFrame] = None
+        self.conteudo_certificado: str = ""
 
     def validar(self) -> None:
-        self.extract_content_without_cert()
+        self.extrair_conteudo_arquivo()
         if not self.eg018():
             self.erros.append({"erro": "EG018"})
             return
@@ -69,11 +71,37 @@ class ValidacaoDesif:
                 erros = pro_serv.validar()
                 self.erros.extend(erros)
 
-    def extract_content_without_cert(self):
-        # Comando OpenSSL para extrair o conteúdo do arquivo .p7s
+    def extrair_conteudo_arquivo(self) -> None:
+        # Comando OpenSSL para extrair o certificado e o conteúdo do arquivo .p7s
+        extract_all_cmd = ["openssl", "smime", "-pk7out", "-inform", "DER", "-in", self.caminho_arquivo]
+
+        # Executar o comando e capturar a saída
+        result = subprocess.run(extract_all_cmd, capture_output=True, text=True)
+        pkcs7_data = result.stdout
+
+        if not pkcs7_data:
+            raise ValueError("Falha ao extrair informações do arquivo.")
+
+        # Comando OpenSSL para extrair o certificado do PKCS7 data
+        extract_cert_cmd = ["openssl", "pkcs7", "-inform", "PEM", "-print_certs"]
+
+        # Executar o comando e capturar a saída, passando pkcs7_data como entrada
+        result = subprocess.run(extract_cert_cmd, input=pkcs7_data, capture_output=True, text=True)
+        cert_data = result.stdout
+
+        if not cert_data:
+            raise ValueError("Certificado não encontrado ou falha ao extrair certificado.")
+
+        # Comando OpenSSL para exibir as informações do certificado
+        show_cert_cmd = ["openssl", "x509", "-noout", "-text"]
+
+        # Executar o comando e capturar a saída, passando cert_data como entrada
+        result = subprocess.run(show_cert_cmd, input=cert_data, capture_output=True, text=True)
+        cert_info = result.stdout
+
+        # Comando OpenSSL para extrair o conteúdo real do arquivo .p7s
         extract_content_cmd = ["openssl", "smime", "-verify", "-inform", "DER", "-in", self.caminho_arquivo, "-noverify",
-                               "-outform",
-                               "PEM"]
+                               "-outform", "PEM"]
 
         # Executar o comando e capturar a saída
         result = subprocess.run(extract_content_cmd, capture_output=True, text=True)
@@ -82,6 +110,7 @@ class ValidacaoDesif:
         if not content:
             raise ValueError("Conteúdo não encontrado ou falha ao extrair conteúdo.")
 
+        self.conteudo_certificado = cert_data
         self.conteudo = content
         self.arquivo = StringIO(content)
 
@@ -433,4 +462,14 @@ class ValidacaoDesif:
     @staticmethod
     def is_negativo(valor):
         return float(str(valor).replace(',', '.')) < 0
+
+    def extrair_cnpj(self):
+        # Ajustar a regex para buscar CNPJ após "LTDA:"
+        cnpj_pattern = re.compile(r'LTDA:(\d{14})')
+        match = cnpj_pattern.search(self.conteudo_certificado)
+
+        if match:
+            return match.group(1)
+        else:
+            return None
 
