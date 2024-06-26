@@ -15,7 +15,7 @@ setup(
         'typing_extensions==4.12.2',
         'python-dateutil~=2.9.0.post0'
     ],
-    python_requires='>=3.12',
+    python_requires='>=3.11',
     author='Wanderson Barradas',
     author_email='wandersonbarrdas07@gmail.com',
     entry_points={
