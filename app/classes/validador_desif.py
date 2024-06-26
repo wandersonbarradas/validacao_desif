@@ -104,8 +104,10 @@ class ValidacaoDesif:
                                "-outform", "PEM"]
 
         # Executar o comando e capturar a saída
-        result = subprocess.run(extract_content_cmd, capture_output=True, text=True)
+        result = subprocess.run(extract_content_cmd, capture_output=True)
         content = result.stdout
+
+        content = content.decode('utf-8', errors='ignore')
 
         if not content:
             raise ValueError("Conteúdo não encontrado ou falha ao extrair conteúdo.")

@@ -2,7 +2,7 @@ import time
 from app.classes.validador_desif import ValidacaoDesif
 from app.helpers.esquemas_e_leiautes import esquemas, leiautes
 
-caminho = "C:/Users/DEV LENOVO/Desktop/DESIF/validacao_desif/_pgcc.txt.p7s"
+caminho = "C:/Users/DEV LENOVO/Desktop/DESIF/validacao_desif/pgcc.txt.p7s"
 
 
 def validar():
